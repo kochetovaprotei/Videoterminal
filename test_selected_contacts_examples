@@ -1,0 +1,192 @@
+    @allure.title("Поиск в списке групп (с трубкой)")
+    @pytest.mark.neva
+    @pytest.mark.dev
+    @pytest.mark.medium
+    @pytest.mark.usefixtures("vcst_with_handset")
+    @pytest.mark.parametrize("mode", ["list", "grid"])
+    def test__search_groups_with_handset(self, vcst_with_handset, mode):
+        vcst = vcst_with_handset
+        contact = {'surname': 'Tester', 'numbers': [{'number': Consts.tester_sip_number, 'is_main': True}]}
+        group_1 = {"name": "First"}
+        group_2 = {"name": "Вторая"}
+        group_3 = {"name": "f-3", "contacts": [contact["surname"]]}
+        all_groups = [group_1, group_2, group_3]
+        groups = [group_1['name'], group_2['name'], group_3['name']]
+        search_args = [{"arg": group_1['name'], "found": [group_1['name']], "selected": group_1},
+                       {"arg": "В", "found": [group_2['name']], "selected": group_2},
+                       {"arg": "f", "found": [group_1['name'], group_3['name']], "selected": group_3},
+                       {"arg": "192", "found": []},
+                       {"arg": "3", "found": [group_3['name']], "selected": group_3},
+                       {"arg": "", "found": [group_1['name'], group_2['name'], group_3['name']], "selected": group_3}]
+        with allure.step("Создание контактов"):
+            vcst.contacts.add_contact(contact)
+            vcst.contacts.contact_should_be_exists(number=contact["numbers"][0]["number"])
+        for group in all_groups:
+            with allure.step(f"Создание группы -{group['name']}"):
+                vcst.contacts.add_group(params=group)
+                vcst.contacts.group_should_be_exists(params=group)
+
+        with allure.step('Выбор режима отображения '):
+            vcst.contacts.change_display_mode(display_mode=mode)
+
+        for search_arg in search_args:
+            with allure.step(f"Поиск по ключу:{search_arg['arg']}"):
+                vcst.contacts.search(contact=search_arg["arg"], subwidget="Groups")
+
+            for group in search_arg["found"]:
+                with allure.step(f"Проверка результата поиска - наличия {group}"):
+                    vcst.contacts.group_should_be_exists(params={"name": group})
+                    # with allure.step(f"Проверка выделения группы"):
+                        # if "selected" in search_arg['arg']:
+                        #     vcst.contacts.group_should_be_selected(name=search_arg["selected"]['name'])
+                        #     params = {"name": search_arg["selected"]['name'],
+                        #               "contacts_count": len(search_arg["selected"]["contacts"])}
+                        #     vcst.contacts.check_group_preview_params(params=params)
+                    with allure.step(f"Проверка отсутствия выделения группы"):
+                        vcst.contacts.group_should_not_be_selected(name=group)
+
+
+
+                not_found = list(set(groups) - set(search_arg["found"]))
+                for not_found_group in not_found:
+                    with allure.step(f"Проверка отсутствия группы {not_found_group}"):
+                        vcst.contacts.group_should_not_be_exists(params={"name": not_found_group})
+
+        with allure.step("Выход из виджета и возврат"):
+            vcst.contacts.exit_from_address_book()
+            vcst.contacts.select_subwidget(subwidget="Groups")
+            for group in groups:
+                with allure.step(f"Проверка отсутствия выделения группы:{group}"):
+                    vcst.contacts.group_should_not_be_selected(name=group)
+
+
+@allure.severity("high")
+    @allure.title('High: Перевод активного вызова через Избранное')
+    @pytest.mark.high
+    @pytest.mark.dev
+    @pytest.mark.usefixtures("tester_mkd")
+    @pytest.mark.usefixtures("tester_2_mkd")
+    @pytest.mark.usefixtures("vcst_mkd")
+    @pytest.mark.parametrize("contacts", [{"vcst": "contacts_1_mkd"}])
+    def test__transfer_call_from_favourites(self, vcst_mkd, tester_mkd, tester_2_mkd, contacts):
+        vcst = vcst_mkd
+        tester = tester_mkd
+        tester_2 = tester_2_mkd
+
+        with allure.step("Вызов ВКСТ -> Тестер-2"):
+            vcst.call.call_by_number(number=Consts.tester_2_mkd_number)
+            tester_2.call.accept_incoming_call()
+            vcst.call.is_call_active()
+        with allure.step("Перейти в Избранное из меню Перевода вызова"):
+            vcst.call.select_widget_in_transfer_menu('Избранное')
+            with allure.step("Проверить, что выделен первый контакт"):
+                vcst.favourites.contact_should_be_selected(number=contact_1["numbers"][0]["number"],
+                                                           hold_or_transfer=True)
+        with allure.step("Перевести вызов из Избранного на Тестер-1"):
+            vcst.favourites.call_by_number(number=contact_1["numbers"][0]["number"], hold_or_transfer=True)
+            tester.call.accept_incoming_call()
+        with allure.step("Проверка того, что вызов переведен"):
+            with allure.step("На ВКСТ:"):
+                vcst.call.is_not_call_active()
+            with allure.step("На Тестере 1"):
+                tester.statistic.check_value(func=tester.statistic.recv_audio_bitrate)
+                if "onyx" not in self.interface:
+                    tester.statistic.check_value(func=tester.statistic.recv_bitrate)
+            with allure.step("На Тестере 2"):
+                tester_2.call.is_call_active()
+                tester_2.statistic.check_value(func=tester_2.statistic.recv_audio_bitrate)
+                if "onyx" not in self.interface:
+                    tester_2.statistic.check_value(func=tester_2.statistic.recv_bitrate)
+        with RunParallel() as parallel:
+            parallel.execute(target=check_sound,
+                             kwargs={"application": vcst, "stream_name": vcst_sinks["headset"]['name'],
+                                     "sound": False})
+            parallel.execute(target=check_sound,
+                             kwargs={"application": tester, "stream_name": tester_sinks["headset"]['name'],
+                                     "np_path": tester2_npy["headset"]})
+            parallel.execute(target=check_sound,
+                             kwargs={"application": tester_2, "stream_name": tester2_sinks["headset"]['name'],
+                                     "np_path": tester_npy["headset"]})
+            if "onyx" not in self.interface:
+                parallel.execute(target=CheckVideo.check_video_call, kwargs={"application": tester,
+                                                                             "abonent": tester_2})
+                parallel.execute(target=CheckVideo.check_video_call, kwargs={"application": tester_2,
+                                                                             "abonent": tester})
+        with allure.step("Проверка присутствия исходящего вызова в журнале ВКСТ, после перевода вызова"):
+            vcst.call_history.call_should_be_exist(number=Consts.tester_2_mkd_number,
+                                                   protocol="SIP",
+                                                   tab_of_call_history='Исходящие')
+        tester.call.release_call()
+        with allure.step("Проверка присутствия исходящего вызова в журнале ВКСТ, после отбивания вызова"):
+            vcst.call_history.call_should_be_exist(number=Consts.tester_2_mkd_number, protocol="SIP",
+                                                   tab_of_call_history='Исходящие')
+
+
+@allure_step(f"Проверка того, что контакт выделен")
+    def contact_should_be_selected(self, number=None, name=None, subwidget="Contacts",
+                                   group=None, hold_or_transfer=False):
+        """
+        Проверка того, что контакт выделен
+        Один из параметров: number или name - обязательный, могут использоваться оба.
+        :param name: Имя абонента (surname+name+patronymic или display name)
+        :param number: Номер контакта
+        :param subwidget: Подвиджет (values: "Contacts" - список контактов, "Groups" - список групп,
+                "Inside_group" - список контактов в группе, "Edit_group" - список контактов в окне редактирования групп)
+        :param group: Наименование группы для "Edit_group" и "Inside_group". Для "Inside_group" обязательно указывать
+                наименование группы, для "Edit_group" при его отсутствии выбирается форма создания группы.
+        :param hold_or_transfer: <bool> состояние удержания или перевода вызова
+        """
+        if not hold_or_transfer:
+            self.select_subwidget(subwidget=subwidget, group=group)
+        self.__contacts.contact_should_be_selected_page(
+            number=number, name=name, subwidget=subwidget, hold_or_transfer=hold_or_transfer)
+        self.log.info(f"Contact is in widget:{self.__class__.__name__}")
+
+
+@allure_step__no_args("Проверка того, что указанный контакт выделен")
+    def contact_should_be_selected_page(self, number, name, subwidget, hold_or_transfer=False):
+        """
+        Проверка того, что указанный контакт выделен
+        :param name: Имя абонента (surname+name+patronymic или display name).
+        :param number: Номер контакта.
+        :param subwidget: Подвиджет (values: "Contacts", "Groups", "Inside_group", "Edit_group").
+        :param hold_or_transfer: <bool> состояние удержания или перевода вызова
+        """
+        caller = self.get_caller_interface()
+        if number is not None and name is not None:
+            self.log.debug(f"Checking selection of contact with number:{number} and name:{name}")
+            self.wait_for_exist(update_model_data=lambda: self.__update_model_data(caller=caller, subwidget=subwidget),
+                                checker=lambda: self._object_should_exists(attributes={'phone': number,
+                                                                                       'full-name': name,
+                                                                                       'selected': True}))
+        elif number is not None and name is None:
+            self.log.debug(f"Checking selection of contact with number:{number}")
+            self.wait_for_exist(update_model_data=lambda: self.__update_model_data(caller=caller, subwidget=subwidget,
+                                                                                   hold_or_transfer=hold_or_transfer), 
+                                checker=lambda: self._object_should_exists(attributes={'phone': number,
+                                                                                       'selected': True}))
+        elif number is None and name is not None:
+            self.log.debug(f"Checking selection of contact with name:{name}")
+            self.wait_for_exist(update_model_data=lambda: self.__update_model_data(caller=caller, subwidget=subwidget),
+                                checker=lambda: self._object_should_exists(attributes={'full-name': name,
+                                                                                       'selected': True}))
+        else:
+            raise ParameterError('There are not params for checking selection of contact')
+
+
+@allure_step__no_args("Получить первый элемент в списке и проверить выделен ли он")
+    def get_and_check_first_selected(self, check_first_selected):
+        """
+        Получить первый элемент в списке и проверить выделен ли он.
+        :param first_element: Получить первый элемент в списке
+        :param check_first_selected: Проверить выделение первого элемента в списке
+                (values: <bool> False - не выделен, True - выделен, None - выделение не проверяется)
+        """
+
+        # self.__model_data[0]
+        self.log.debug(f'First element {self.__model_data[0]} is')
+        from library.consts import print
+        if check_first_selected is not None:
+            assert self.__model_data[0]["selected"] == check_first_selected, f"Error selected element"
+        print(f'print first element{self.__model_data[0]["selected"]}, check{check_first_selected}')
+        print(f'print first element{type(self.__model_data[0]["selected"])}, check{type(check_first_selected)}')
